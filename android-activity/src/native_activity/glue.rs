@@ -561,8 +561,16 @@ impl WaitableNativeActivityState {
         self.cond.notify_one();
     }
 
+    /// Must be called on the `android_main` thread, before it exits.
     pub fn notify_main_thread_stopped_running(&self) {
         let mut guard = self.mutex.lock().unwrap();
+        // The input queue is attached to this thread's `ALooper`, which is destroyed when the
+        // thread exits. `AInputQueue` only keeps a raw pointer to that looper, so detach it now:
+        // otherwise the Java side disposing the queue later (e.g. when the window detaches) calls
+        // into the destroyed looper. Since Android callbacks no longer wait for this thread once
+        // it's stopped, nothing else will ever swap or detach the queue, so forget it as well.
+        unsafe { guard.detach_input_queue_from_looper() };
+        guard.input_queue = ptr::null_mut();
         guard.thread_state = NativeThreadState::Stopped;
         // Notify all waiters to unblock any Android callbacks that would otherwise be waiting
         // indefinitely for the now-stopped (!) main thread.
